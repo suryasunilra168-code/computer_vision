@@ -1,0 +1,408 @@
+# ==============================================
+# ACCURATE OBJECT DETECTION & TRANSFORMATION
+# Using YOLOv8 for Fruit, Cup, Book Detection
+# Google Colab Ready
+# ==============================================
+
+# Step 1: Install Required Libraries
+!pip install ultralytics opencv-python numpy matplotlib Pillow scikit-image -q
+print("Libraries installed successfully.")
+
+# Step 2: Import Libraries
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import os
+import urllib.request
+from google.colab import files
+import warnings
+from ultralytics import YOLO
+import torch
+warnings.filterwarnings('ignore')
+
+print("Libraries imported.")
+
+# Step 3: Upload Image
+print("Please upload an image for object detection:")
+uploaded = files.upload()
+
+image_filename = list(uploaded.keys())[0] if uploaded else None
+
+if image_filename:
+    print(f"Uploaded file: {image_filename}")
+else:
+    print("No file uploaded. Using sample image.")
+    sample_url = "https://images.unsplash.com/photo-1551024601-bec78aea704b"  # Sample with fruits
+    image_filename = "sample_image.jpg"
+    urllib.request.urlretrieve(sample_url, image_filename)
+
+# Step 4: Load and Display Image
+def load_image(image_path):
+    try:
+        img = Image.open(image_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        return np.array(img)
+    except Exception as e:
+        print("Image loading error:", e)
+        return None
+
+image_rgb = load_image(image_filename)
+
+if image_rgb is not None:
+    plt.figure(figsize=(10, 8))
+    plt.imshow(image_rgb)
+    plt.title(f"Original Image ({image_rgb.shape[1]}x{image_rgb.shape[0]})")
+    plt.axis('off')
+    plt.show()
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+else:
+    image_bgr = None
+
+# Step 5: Load YOLOv8 Model (Pre-trained on COCO dataset)
+print("Loading YOLOv8 model...")
+model = YOLO('yolov8n.pt')  # Using nano version for speed, can use 'yolov8s.pt' or 'yolov8m.pt' for better accuracy
+
+# COCO class names that include fruits, cups, books, and common objects
+COCO_CLASSES = [
+    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+    'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
+    'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
+    'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
+    'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+    'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+    'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+    'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster',
+    'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
+    'toothbrush'
+]
+
+# Focus on specific classes we want (fruits, cups, books, etc.)
+TARGET_CLASSES = {
+    'apple': 47, 'orange': 49, 'banana': 46, 'cup': 41, 'bottle': 39, 
+    'wine glass': 40, 'bowl': 45, 'book': 73, 'clock': 74, 'vase': 75,
+    'sandwich': 48, 'pizza': 53, 'donut': 54, 'cake': 55, 'chair': 56,
+    'couch': 57, 'potted plant': 58, 'bed': 59, 'dining table': 60,
+    'laptop': 63, 'mouse': 64, 'keyboard': 66, 'cell phone': 67
+}
+
+# Step 6: Detect Objects using YOLOv8
+def detect_objects_yolo(image_bgr, confidence_threshold=0.25):
+    """Detect objects using YOLOv8 model"""
+    if image_bgr is None:
+        return []
+    
+    # Run YOLOv8 inference
+    results = model(image_bgr, conf=confidence_threshold, verbose=False)
+    
+    objects = []
+    h, w = image_bgr.shape[:2]
+    
+    for result in results:
+        if result.boxes is not None:
+            boxes = result.boxes.cpu().numpy()
+            
+            for i, box in enumerate(boxes):
+                # Get bounding box coordinates
+                x1, y1, x2, y2 = box.xyxy[0].astype(int)
+                confidence = box.conf[0]
+                class_id = int(box.cls[0])
+                
+                # Filter for target classes only
+                class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"class_{class_id}"
+                
+                # Only include objects we're interested in
+                if class_name in TARGET_CLASSES:
+                    bw = x2 - x1
+                    bh = y2 - y1
+                    
+                    # Extract object with padding
+                    padding = 10
+                    x1_pad = max(0, x1 - padding)
+                    y1_pad = max(0, y1 - padding)
+                    x2_pad = min(w, x2 + padding)
+                    y2_pad = min(h, y2 + padding)
+                    
+                    obj_img = image_bgr[y1_pad:y2_pad, x1_pad:x2_pad]
+                    
+                    if obj_img.size == 0:
+                        continue
+                    
+                    objects.append({
+                        "id": i,
+                        "image": obj_img.copy(),
+                        "bbox": (x1, y1, bw, bh),
+                        "bbox_padded": (x1_pad, y1_pad, x2_pad - x1_pad, y2_pad - y1_pad),
+                        "label": class_name,
+                        "confidence": float(confidence),
+                        "score": float(confidence),
+                        "area": bw * bh,
+                        "class_id": class_id
+                    })
+    
+    # Sort by confidence score
+    return sorted(objects, key=lambda x: x["confidence"], reverse=True)
+
+# Step 7: Perform Detection
+print("Detecting objects using YOLOv8...")
+
+detected_objects = detect_objects_yolo(image_bgr, confidence_threshold=0.25)
+
+print(f"Objects detected: {len(detected_objects)}")
+
+# Display detected objects
+if detected_objects:
+    img_box = image_bgr.copy()
+    color_map = {
+        'apple': (0, 255, 0), 'orange': (0, 165, 255), 'banana': (0, 255, 255),
+        'cup': (255, 0, 0), 'bottle': (255, 0, 255), 'wine glass': (255, 165, 0),
+        'book': (128, 0, 128), 'bowl': (0, 128, 128), 'default': (0, 255, 0)
+    }
+    
+    for obj in detected_objects:
+        x, y, w, h = obj["bbox"]
+        class_name = obj["label"]
+        confidence = obj["confidence"]
+        
+        # Get color for this class
+        color = color_map.get(class_name, color_map['default'])
+        
+        # Draw bounding box
+        cv2.rectangle(img_box, (x, y), (x + w, y + h), color, 2)
+        
+        # Draw label with confidence
+        label = f"{class_name}: {confidence:.2f}"
+        label_size, baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        
+        # Background for text
+        cv2.rectangle(img_box, 
+                     (x, y - label_size[1] - 10), 
+                     (x + label_size[0], y), 
+                     color, -1)
+        
+        # Text
+        cv2.putText(img_box, label, (x, y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    # Convert to RGB for matplotlib
+    img_display = cv2.cvtColor(img_box, cv2.COLOR_BGR2RGB)
+    
+    plt.figure(figsize=(12, 10))
+    plt.imshow(img_display)
+    plt.title(f"Detected Objects: {len(detected_objects)} found")
+    plt.axis('off')
+    plt.show()
+    
+    # Save and download
+    cv2.imwrite("detected_objects_accurate.jpg", img_box)
+    files.download("detected_objects_accurate.jpg")
+
+# Step 8: Display Individual Detected Objects
+if detected_objects:
+    print("\nDisplaying individual detected objects:")
+    num_objects = len(detected_objects)
+    cols = min(3, num_objects)
+    rows = (num_objects + cols - 1) // cols
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(15, 5 * rows))
+    if rows == 1 and cols == 1:
+        axes = np.array([axes])
+    axes = axes.ravel()
+    
+    for i, obj in enumerate(detected_objects):
+        obj_img_rgb = cv2.cvtColor(obj["image"], cv2.COLOR_BGR2RGB)
+        axes[i].imshow(obj_img_rgb)
+        axes[i].set_title(f"{obj['label']} ({obj['confidence']:.2f})")
+        axes[i].axis('off')
+    
+    # Hide empty subplots
+    for i in range(len(detected_objects), len(axes)):
+        axes[i].axis('off')
+    
+    plt.suptitle(f"Individual Detected Objects", fontsize=16)
+    plt.tight_layout()
+    plt.show()
+
+# Step 9: Enhanced Transformations for All Geometric Transforms
+def apply_all_geometric_transformations(img):
+    """Apply all geometric transformations to an image"""
+    if img is None or img.size == 0:
+        return {}
+    
+    h, w = img.shape[:2]
+    center = (w//2, h//2)
+    
+    transformations = {}
+    
+    # 1. Original
+    transformations["Original"] = img.copy()
+    
+    # 2. Translation (Shift by 20px right, 15px down)
+    M_translation = np.float32([[1, 0, 20], [0, 1, 15]])
+    transformations["Translation"] = cv2.warpAffine(img, M_translation, (w, h))
+    
+    # 3. Rotation (30 degrees clockwise)
+    M_rotation = cv2.getRotationMatrix2D(center, 30, 1.0)
+    transformations["Rotation"] = cv2.warpAffine(img, M_rotation, (w, h))
+    
+    # 4. Scaling (1.3x)
+    transformations["Scaling"] = cv2.resize(img, None, fx=1.3, fy=1.3, interpolation=cv2.INTER_LINEAR)
+    
+    # 5. Shearing (Horizontal shear)
+    shear_factor = 0.2
+    M_shear = np.float32([[1, shear_factor, 0], [0, 1, 0]])
+    transformations["Shearing"] = cv2.warpAffine(img, M_shear, (w, h))
+    
+    # 6. Rigid (Euclidean) Transformation: Rotation + Translation
+    angle = 20  # degrees
+    tx, ty = 15, 10  # translation
+    
+    theta = np.radians(angle)
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    
+    M_rigid = np.float32([
+        [cos_theta, -sin_theta, tx],
+        [sin_theta, cos_theta, ty]
+    ])
+    transformations["Rigid_Euclidean"] = cv2.warpAffine(img, M_rigid, (w, h))
+    
+    # 7. Similarity Transformation: Rotation + Translation + Uniform Scaling
+    similarity_scale = 1.15  # uniform scaling factor
+    M_similarity = np.float32([
+        [similarity_scale * cos_theta, -similarity_scale * sin_theta, tx],
+        [similarity_scale * sin_theta, similarity_scale * cos_theta, ty]
+    ])
+    transformations["Similarity"] = cv2.warpAffine(img, M_similarity, (w, h))
+    
+    # 8. Affine Transformation
+    src_points = np.float32([[0, 0], [w-1, 0], [0, h-1]])
+    dst_points = np.float32([
+        [0 + 0.08*w, 0],
+        [w-1 - 0.08*w, 0.03*h],
+        [0.03*w, h-1]
+    ])
+    M_affine = cv2.getAffineTransform(src_points, dst_points)
+    transformations["Affine"] = cv2.warpAffine(img, M_affine, (w, h))
+    
+    return transformations
+
+# Step 10: Apply Transformations to Each Detected Object
+if detected_objects:
+    print(f"\nApplying geometric transformations to each detected object...")
+    
+    # Create main output directory
+    os.makedirs("object_transformations", exist_ok=True)
+    
+    # Process each object
+    for i, obj in enumerate(detected_objects[:6]):  # Limit to first 6 objects for manageability
+        print(f"\nProcessing {obj['label']} {i+1}/{len(detected_objects[:6])}...")
+        
+        # Apply transformations
+        transformations = apply_all_geometric_transformations(obj["image"])
+        
+        # Create folder for this object
+        obj_folder = f"object_transformations/{obj['label']}_{i+1}"
+        os.makedirs(obj_folder, exist_ok=True)
+        
+        # Save each transformation
+        for name, img in transformations.items():
+            filename = f"{obj_folder}/{name.lower().replace(' ', '_')}.jpg"
+            cv2.imwrite(filename, img)
+        
+        # Create visualization grid
+        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+        axes = axes.ravel()
+        
+        transformation_names = list(transformations.keys())
+        
+        for idx, ax in enumerate(axes):
+            if idx < len(transformation_names):
+                name = transformation_names[idx]
+                img_transformed = transformations[name]
+                
+                if len(img_transformed.shape) == 3:
+                    img_display = cv2.cvtColor(img_transformed, cv2.COLOR_BGR2RGB)
+                else:
+                    img_display = img_transformed
+                
+                ax.imshow(img_display)
+                ax.set_title(f"{name}")
+                ax.axis('off')
+            else:
+                ax.axis('off')
+        
+        plt.suptitle(f"Transformations for {obj['label']} (Confidence: {obj['confidence']:.2f})", 
+                    fontsize=14, y=0.98)
+        plt.tight_layout()
+        plt.savefig(f"{obj_folder}/{obj['label']}_transformations_grid.jpg", 
+                   dpi=150, bbox_inches='tight')
+        plt.show()
+
+# Step 11: Create and Save Summary
+print("\nCreating processing summary...")
+
+with open("object_detection_transformations_summary.txt", "w") as f:
+    f.write("=" * 60 + "\n")
+    f.write("OBJECT DETECTION & TRANSFORMATIONS SUMMARY\n")
+    f.write("=" * 60 + "\n\n")
+    
+    f.write(f"Input Image: {image_filename}\n")
+    f.write(f"Image Dimensions: {image_bgr.shape[1]}x{image_bgr.shape[0]}\n")
+    f.write(f"Objects Detected: {len(detected_objects)}\n")
+    f.write(f"Detection Model: YOLOv8 (COCO pre-trained)\n")
+    f.write(f"Confidence Threshold: 0.25\n\n")
+    
+    f.write("Detected Objects:\n")
+    f.write("-" * 40 + "\n")
+    for i, obj in enumerate(detected_objects):
+        x, y, w, h = obj["bbox"]
+        f.write(f"{i+1}. {obj['label'].upper()}:\n")
+        f.write(f"   - Confidence: {obj['confidence']:.3f}\n")
+        f.write(f"   - Bounding Box: x={x}, y={y}, w={w}, h={h}\n")
+        f.write(f"   - Area: {obj['area']} pixels\n")
+        f.write(f"   - Folder: object_transformations/{obj['label']}_{i+1}/\n\n")
+    
+    f.write("Transformations Applied to Each Object:\n")
+    f.write("-" * 40 + "\n")
+    f.write("1. Original\n")
+    f.write("2. Translation\n")
+    f.write("3. Rotation\n")
+    f.write("4. Scaling\n")
+    f.write("5. Shearing\n")
+    f.write("6. Rigid (Euclidean)\n")
+    f.write("7. Similarity\n")
+    f.write("8. Affine\n\n")
+    
+    f.write("Target Classes Detected:\n")
+    f.write("-" * 40 + "\n")
+    class_counts = {}
+    for obj in detected_objects:
+        class_counts[obj['label']] = class_counts.get(obj['label'], 0) + 1
+    
+    for class_name, count in class_counts.items():
+        f.write(f"- {class_name}: {count} instance(s)\n")
+
+# Download summary file
+files.download("object_detection_transformations_summary.txt")
+
+# Step 12: Create ZIP archive
+print("\nCreating ZIP archive of all transformations...")
+!zip -r all_object_transformations.zip object_transformations/ detected_objects_accurate.jpg object_detection_transformations_summary.txt
+
+# Download the ZIP file
+files.download("all_object_transformations.zip")
+
+print("\n" + "="*60)
+print("PROCESSING COMPLETED SUCCESSFULLY!")
+print("="*60)
+print(f"\nSummary:")
+print(f"- Used YOLOv8 model for accurate object detection")
+print(f"- Detected {len(detected_objects)} objects")
+print(f"- Applied 8 geometric transformations to each object")
+print(f"- Generated visualization grids for each object")
+print(f"- All files organized in 'object_transformations/' folder")
+print(f"- Summary file: object_detection_transformations_summary.txt")
+print(f"- ZIP archive: all_object_transformations.zip")
